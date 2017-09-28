@@ -215,16 +215,7 @@ function gwas_option(person::Person, snpdata::SnpData,
   # create a new field of type Float64 that will replace :sex.
   #
   if searchindex(string(rhs), "Sex") > 0 && in(:Sex, names(model.df))
-    model.df[:NumericSex] = ones(person.people)
-    for i = 1:person.people
-      s = model.df[i, :Sex]
-      if !isa(parse(string(s), raise=false), Number); s = lowercase(s); end
-      if !(s in keyword["male"]); model.df[i, :NumericSex] = -1.0; end
-    end
-    names_list = names(model.df)
-    deleteat!(names_list, findin(names_list, [:Sex]))
-    model.df = model.df[:, names_list]
-    rename!(model.df, :NumericSex, :Sex)
+    change_sex_desig!(person, keyword, model)
   end
   #
   # For Logistic regression make sure the cases are 1.0,
@@ -504,5 +495,24 @@ function add_pcs!(pedigree_frame::DataFrame, snpdata::SnpData,
   keyword["regression_formula"] = regress_form
   return nothing
 end # function add_pcs!
+
+"""
+Change sex designations to -1.0 (females) and +1.0 (males).
+Since the field :sex may have type string,
+create a new field of type Float64 that will replace :sex.
+"""
+function change_sex_desig!(person::Person, 
+  keyword::Dict{AbstractString, Any}, model::ModelFrame)
+  model.df[:NumericSex] = ones(person.people)
+  for i = 1:person.people
+    s = model.df[i, :Sex]
+    if !isa(parse(string(s), raise=false), Number); s = lowercase(s); end
+    if !(s in keyword["male"]); model.df[i, :NumericSex] = -1.0; end
+  end
+  names_list = names(model.df)
+  deleteat!(names_list, findin(names_list, [:Sex]))
+  model.df = model.df[:, names_list]
+  rename!(model.df, :NumericSex, :Sex)
+end #function change_sex_desig!
 
 end # module MendelGWAS
