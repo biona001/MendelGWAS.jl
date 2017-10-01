@@ -225,19 +225,7 @@ function gwas_option(person::Person, snpdata::SnpData,
   #
   case_label = keyword["affected_designator"]
   if regression_type == "logistic" && case_label != ""
-    model.df[:NumericTrait] = zeros(person.people)
-    for i = 1:person.people
-      s = string(model.df[i, lhs])
-      if s == ""
-        model.df[i, :NumericTrait] = NaN
-      elseif s == case_label
-        model.df[i, :NumericTrait] = 1.0
-      end
-    end
-    names_list = names(model.df)
-    deleteat!(names_list, findin(names_list, [lhs]))
-    model.df = model.df[:, names_list]
-    rename!(model.df, :NumericTrait, lhs)
+    change_trait_desig!(lhs, person, model)
   end
   #
   # To ensure that the trait and SNPs occur in the same order, sort the
@@ -514,5 +502,28 @@ function change_sex_desig!(person::Person,
   model.df = model.df[:, names_list]
   rename!(model.df, :NumericSex, :Sex)
 end #function change_sex_desig!
+
+""" 
+For Logistic regression make sure the cases are 1.0,
+non-cases are 0.0, and missing data is NaN.
+Again, since the trait field may be of type string,
+create a new field of type Float64 that will replace it.
+"""
+function change_trait_desig!(lhs::Symbol, case_label::String,
+  person::Person, model::ModelFrame)
+  model.df[:NumericTrait] = zeros(person.people)
+  for i = 1:person.people
+    s = string(model.df[i, lhs])
+    if s == ""
+      model.df[i, :NumericTrait] = NaN
+    elseif s == case_label
+      model.df[i, :NumericTrait] = 1.0
+    end
+  end
+  names_list = names(model.df)
+  deleteat!(names_list, findin(names_list, [lhs]))
+  model.df = model.df[:, names_list]
+  rename!(model.df, :NumericTrait, lhs)
+end #function change_trait_desig
 
 end # module MendelGWAS
