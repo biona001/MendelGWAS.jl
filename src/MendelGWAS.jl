@@ -16,8 +16,13 @@ import Compat: view
 using DataFrames                        # From package DataFrames.
 using Distributions                     # From package Distributions.
 using GLM                               # From package GLM.
-using Plots                             # From package Plots.
 using StatsBase                         # From package StatsBase.
+#
+# Use Plots as the plotting frontend and select a backend.
+#
+using Plots                             # From package Plots.
+#gr()
+## pyplot()
 
 export GWAS
 
@@ -111,8 +116,6 @@ This function performs GWAS on a set of traits.
 function gwas_option(person::Person, snpdata::SnpData,
   pedigree_frame::DataFrame, keyword::Dict{AbstractString, Any})
 
-  const TAB_CHAR :: Char = Char(9)
-
   people = person.people
   snps = snpdata.snps
   io = keyword["output_unit"]
@@ -121,112 +124,34 @@ function gwas_option(person::Person, snpdata::SnpData,
   #
   # Recognize the three basic GWAS regression models:
   # Linear, Logistic, and Poisson.
-  # For these three we will use fast internal regression code.
+  # For these three we will use fast internal regression code,
+  # unless an interaction term is detected.
   #
-  regression_type = lowercase(keyword["regression"])
-  distribution_family = keyword["distribution"]
-  link = keyword["link"]
-  if regression_type == "linear" ||
-     (distribution_family == Normal() && link == IdentityLink())
-    keyword["distribution"] = Normal()
-    keyword["link"] = IdentityLink()
-    keyword["regression"] = "linear"
-    fast_method = true
-  elseif regression_type == "logistic" ||
-     (distribution_family == Binomial() && link == LogitLink())
-    keyword["distribution"] = Binomial()
-    keyword["link"] = LogitLink()
-    keyword["regression"] = "logistic"
-    fast_method = true
-  elseif regression_type == "poisson" ||
-     (distribution_family == Poisson() && link == LogLink())
-    keyword["distribution"] = Poisson()
-    keyword["link"] = LogLink()
-    keyword["regression"] = "poisson"
-    fast_method = true
-  elseif regression_type == "" && distribution_family == "" && link == ""
-    throw(ArgumentError(
-      "No regression type has been defined for this analysis.\n" *
-      "Set the keyword regression to either:\n" *
-      "  linear (for usual quantitative traits),\n" *
-      "  logistic (for usual qualitative traits),\n" *
-      "  Poisson, or blank (for unusual analyses).\n" *
-      "If keyword regression is not assigned, then the keywords\n" *
-      "'distribution' and 'link' must be assigned names of functions.\n \n"))
-  else
-    fast_method = false
-  end
-  regression_type = lowercase(keyword["regression"])
-  distribution_family = keyword["distribution"]
-  link = keyword["link"]
-  if regression_type != "" && regression_type != "linear" &&
-     regression_type != "logistic" && regression_type != "poisson"
-    throw(ArgumentError(
-     "The keyword regression (currently: $regression_type) must be assigned\n" *
-     "the value 'linear', 'logistic', 'Poisson', or blank.\n \n"))
-  end
-  #
-  # Retrieve the regression formula and create a model frame.
-  #
-  regression_formula = keyword["regression_formula"]
-  if regression_formula == ""
-    throw(ArgumentError(
-      "The keyword regression_formula appears blank.\n" *
-      "A regression formula must be provided.\n \n"))
-  end
-  if !contains(regression_formula, "~")
-    throw(ArgumentError(
-      "The value of the keyword regression_formula ('$regression_formula')\n" *
-      "does not contain the required '~' that should separate\n" *
-      "the trait and the predictors.\n \n"))
-  end
-  side = split(regression_formula, "~")
-  side[1] = strip(side[1])
-  side[2] = strip(side[2])
-  if side[1] == ""
-    throw(ArgumentError(
-      "The left hand side of the formula specified in\n" *
-      "the keyword regression_formula appears blank.\n" *
-      "This should be the name of the trait field in the Pedigree file.\n \n"))
-  end
-  if search(side[1], [' ', TAB_CHAR, ',', ';', '+', '*', '&']) > 0
-    lhs_string = side[1]
-    throw(ArgumentError(
-      "The left hand side ('$lhs_string') of the formula specified in\n" *
-      "the keyword regression_formula appears to have multiple entries.\n" *
-      "The left hand side should contain only the name of the trait field\n" *
-      "in the Pedigree file.\n \n"))
-  end
-  if side[2] == ""; side[2] = "1"; end
-  lhs = parse(side[1])
-  rhs = parse(side[2])
-  if !(lhs in names(pedigree_frame))
-    lhs_string = string(lhs)
-    throw(ArgumentError(
-      "The field named on the left hand side of the formula specified in\n" *
-      "the keyword regression_formula (currently: '$lhs_string')\n" *
-      "is not in the Pedigree data file.\n \n"))
-  end
-  fm = Formula(lhs, rhs)
-  model = ModelFrame(fm, pedigree_frame)
+  fast_method, lhs, rhs = assign_method(keyword, pedigree_frame)
   #
   # Change sex designations to -1.0 (females) and +1.0 (males).
   # Since the field :sex may have type string,
   # create a new field of type Float64 that will replace :sex.
   #
-  if searchindex(string(rhs), "Sex") > 0 && in(:Sex, names(model.df))
-    change_sex_desig!(person, keyword, model)
+  if searchindex(string(rhs), "Sex") > 0 && in(:Sex, names(pedigree_frame))
+    pedigree_frame = change_sex_desig!(person, keyword, pedigree_frame)
   end
   #
   # For Logistic regression make sure the cases are 1.0,
   # non-cases are 0.0, and missing data is NaN.
-  # Again, since the trait field may be of type string,
-  # create a new field of type Float64 that will replace it.
+  # Again, since the trait field may be of type String,
+  # create a new field of type Float64 that replaces it.
   #
   case_label = keyword["affected_designator"]
+  regression_type = lowercase(keyword["regression"])
   if regression_type == "logistic" && case_label != ""
-    change_trait_desig!(lhs, person, model)
+    pedigree_frame = change_case_desig!(lhs, case_label, person, pedigree_frame)
   end
+  #
+  #  Create a model frame.
+  #
+  fm = Formula(lhs, rhs)
+  model = ModelFrame(fm, pedigree_frame)
   #
   # To ensure that the trait and SNPs occur in the same order, sort the
   # the model dataframe by the entry-order column of the pedigree frame.
@@ -246,13 +171,13 @@ function gwas_option(person::Person, snpdata::SnpData,
     #
     # Copy the complete rows into a design matrix X and a response vector y.
     #
-    mm = ModelMatrix(model) # Extract the model matrix with missing values.
+    modelmatrx = ModelMatrix(model)
     complete = completecases(model.df)
     cases = sum(complete)
-    predictors = size(mm.m, 2)
+    predictors = size(modelmatrx.m, 2)
     X = zeros(cases, predictors)
     for j = 1:predictors
-      X[:, j] = mm.m[complete, j]
+      X[:, j] = modelmatrx.m[complete, j]
     end
     y = zeros(cases)
     y[1:end] = model.df[complete, lhs]
@@ -260,6 +185,11 @@ function gwas_option(person::Person, snpdata::SnpData,
     # Estimate parameters under the base model. Record the vector of residuals.
     #
     (base_estimate, base_loglikelihood) = regress(X, y, regression_type)
+    println(base_estimate)
+    println(base_loglikelihood)
+    println(X)
+    println(y)
+    println(regression_type)
     if regression_type == "linear"
       residual_base = y - (X * base_estimate)
     end
@@ -286,6 +216,8 @@ function gwas_option(person::Person, snpdata::SnpData,
     #
     # Let the GLM package estimate parameters. Output results.
     #
+    link = keyword["link"]
+    distribution_family = keyword["distribution"]
     base_model = glm(fm, model.df, distribution_family, link)
     println(io, "Summary for Base Model:\n ")
     print(io, base_model)
@@ -296,13 +228,8 @@ function gwas_option(person::Person, snpdata::SnpData,
   # Add a column to the design matrix to hold the SNP dosages.
   # Change the regression formula to include the SNP.
   #
-  X = [X zeros(cases)]
-  if side[2] == ""
-    rhs = parse("SNP")
-  else
-    rhs = parse(side[2] * " + " * "SNP")
-  end
-  fm = Formula(lhs, rhs)
+  if fast_method; X = [X zeros(cases)]; end
+  rhs = parse(string(rhs) * " + SNP")
   #
   # Analyze the SNP predictors one by one.
   #
@@ -314,15 +241,16 @@ function gwas_option(person::Person, snpdata::SnpData,
     #
     if snpdata.maf[snp] <= maf_threshold; continue; end
     #
-    # Copy the current SNP genotypes into a dosage vector.
+    # Copy the current SNP genotypes into a dosage vector,
+    # allowing missing genotypes to be simplistically imputed based on MAF.
     #
-    copy!(dosage, view(snpdata.snpmatrix, :, snp); impute = false)
+    copy!(dosage, view(snpdata.snpmatrix, :, snp); impute = true)
     #
     # For the three basic regression types, analyze the alternative model
     # using internal score test code. If the score test p-value
     # is below the specified threshold, carry out a likelihood ratio test.
     #
-    if fast_method
+    if fast_method 
       X[:, end] = dosage[complete]
       estimate = [base_estimate; 0.0]
       score_test = glm_score_test(X, y, estimate, regression_type)
@@ -364,9 +292,11 @@ function gwas_option(person::Person, snpdata::SnpData,
         hw = hardy_weinberg_test(dosage)
       end
       println(io, "Hardy-Weinberg p-value: ", round(hw, 4))
-      if fast_method
+      if fast_method && pvalue[snp] < lrt_threshold
         println(io, "SNP effect estimate: ", signif(estimate[end], 4))
         println(io, "SNP model loglikelihood: ", signif(loglikelihood, 8))
+      elseif fast_method
+        println(io, "SNP effect estimate: ", signif(estimate[end], 4))
       else
         println(io, "")
         println(io, snp_model)
@@ -391,7 +321,7 @@ function gwas_option(person::Person, snpdata::SnpData,
   println(io, "        P-value   Number of Passing")
   println(io, "FDR    Threshold     Predictors \n")
   for i = 1:length(fdr)
-    @printf(io,"%4.2f   %8.5f   %9i\n", fdr[i], threshold[i], number_passing[i])
+    @printf(io, "%4.2f   %8.5f   %9i\n", fdr[i], threshold[i], number_passing[i])
   end
   println(io, " ")
   #
@@ -400,58 +330,55 @@ function gwas_option(person::Person, snpdata::SnpData,
   # [[Next, sort the data by chromosome and basepair location!]]
   #
   plot_file = keyword["manhattan_plot_file"]
-  if plot_file != "" && VERSION ≥ v"0.5.0" && VERSION < v"0.6.0"
-##  if plot_file != ""
+  if plot_file != ""
     println(" \nCreating a Manhattan plot from the GWAS results.\n")
     if !contains(plot_file, ".png"); string(plot_file, ".png"); end
     #
-    # Generate a dataframe for plotting. [[There is no need to include basepairs??]]
+    # Generate a dataframe for plotting.
+    # Plot via SNP number. Should be via basepair position!
     #
-    plot_frame = DataFrame(
-      X = 1:length(pvalue),
+    plot_frame = DataFrame( SNPnumber = 1:snps,
       NegativeLogPvalue = -log10.(pvalue),
       Chromosome = snpdata.chromosome)
     #
-    # Choose a plotting backend for the Plots frontend to use.
-    #
-    pyplot()
-    #
-    # Create the scatter plot of the -log10(p-values) grouped by chromosome number.
+    # Create the scatter plot of the -log10(p-values) grouped by chromosome.
     # Set the size, shape, and color of the plotted elements.
     #
-    plt = scatter(x = plot_frame[:X], y = plot_frame[:NegativeLogPvalue],
-        group = plot_frame[:Chromosome],
-        markersize = 3, markerstrokewidth = 0, color_palette = :rainbow)
-    #
-    # Specify the x-axis tick marks to be at the center of the chromosome.
-    # Use x-axis tick marks only in the odd numbered chromosomes.
-    # Also, label the x-axis.
-    #
-    xticks = by(plot_frame, :Chromosome, plot_frame -> mean(plot_frame[:X]))
-    xaxis!(plt, xticks = (sort(xticks[:x1].data)[1:2:end], 1:2:size(xticks, 1)))
-    xaxis!(plt, xlabel = "Chromosome")
-    #
-    # Add the y-axis information.
-    #
-    yaxis!(plt, ylabel = "-log\$_{10}\$(p-value)")
-    #
-    # Use a grey grid and remove the legend.
-    #
-    plot!(plt, gridcolor = :lightgrey, legend = false)
-    #
-    # Add an overall title.
-    #
-    plot!(plt, title = "Manhattan Plot", window_title = "Manhattan Plot")
-    #
-    # Add a dashed horizontal line that indicates the Bonferonni threshold.
-    #
-    Plots.abline!(plt, 0, -log10(.05 / length(pvalue)), color = :black,
-        line = :dash)
-    #
-    # Display the plot and then save the plot to a file.
-    #
-    display(plt)
-    savefig(plt, plot_file)
+    # plt = scatter(x = plot_frame[:SNPnumber], y = plot_frame[:NegativeLogPvalue], 
+    #   group = plot_frame[:Chromosome],
+    #   markersize = 3, markerstrokewidth = 0, color_palette = :rainbow)
+    # #
+    # # Specify the x-axis tick marks to be at the center of the chromosome.
+    # # Use x-axis tick marks only in the odd numbered chromosomes.
+    # # Also, label the x-axis.
+    # #
+    # xticks = by(plot_frame, :Chromosome, 
+    #   plot_frame -> mean(plot_frame[:SNPnumber]))
+    # xaxis!(plt, xticks = (sort(xticks[:x1].data)[1:2:end], 1:2:size(xticks, 1)))
+    # xaxis!(plt, xlabel = "Chromosome")
+    # #
+    # # Add the y-axis information.
+    # #
+    # yaxis!(plt, ylabel = "-log10(p-value)")
+    # #
+    # # Use a grey grid and remove the legend.
+    # #
+    # plot!(plt, gridcolor = :lightgrey, legend = false)
+    # #
+    # # Add an overall title.
+    # #
+    # plot!(plt, title = "Manhattan Plot", window_title = "Manhattan Plot")
+    # #
+    # # Add a dashed horizontal line that indicates the Bonferonni threshold.
+    # #
+    # Plots.abline!(plt, 0, -log10(.05 / length(pvalue)), color = :black,
+    #     line = :dash)
+    # ##    hline!(plt, -log10(.05 / length(pvalue)), line = (1, :dash, 0.5, :black))
+    # #
+    # # Display the plot and then save the plot to a file.
+    # #
+    # savefig(plt, plot_file)
+    # display(plt)
   end
   return execution_error = false
 end # function gwas_option
@@ -485,22 +412,134 @@ function add_pcs!(pedigree_frame::DataFrame, snpdata::SnpData,
 end # function add_pcs!
 
 """
-Change sex designations to -1.0 (females) and +1.0 (males).
-Since the field :sex may have type string,
-create a new field of type Float64 that will replace :sex.
+Recognize the three basic GWAS regression models:
+Linear, Logistic, and Poisson.
+For these three we will use fast internal regression code.
+
+returns: fast_method (boolean), lhs (Symbol), rhs (Symbol)
+"""
+function assign_method(keyword::Dict{AbstractString, Any}, 
+  pedigree_frame::DataFrame) 
+
+  const TAB_CHAR :: Char = Char(9)
+  regression_type = lowercase(keyword["regression"])
+  distribution_family = keyword["distribution"]
+  link = keyword["link"]
+  regression_formula = keyword["regression_formula"] 
+  
+  if regression_type == "linear" ||
+     (distribution_family == Normal() && link == IdentityLink())
+    keyword["distribution"] = Normal()
+    keyword["link"] = IdentityLink()
+    keyword["regression"] = "linear"
+    fast_method = true
+  elseif regression_type == "logistic" ||
+     (distribution_family == Binomial() && link == LogitLink())
+    keyword["distribution"] = Binomial()
+    keyword["link"] = LogitLink()
+    keyword["regression"] = "logistic"
+    fast_method = true
+  elseif regression_type == "poisson" ||
+     (distribution_family == Poisson() && link == LogLink())
+    keyword["distribution"] = Poisson()
+    keyword["link"] = LogLink()
+    keyword["regression"] = "poisson"
+    fast_method = true
+  elseif regression_type == "" && distribution_family == "" && link == ""
+    throw(ArgumentError(
+      "No regression type has been defined for this analysis.\n" *
+      "Set the keyword regression to either:\n" *
+      "  linear (for usual quantitative traits),\n" *
+      "  logistic (for usual qualitative traits),\n" *
+      "  Poisson, or blank (for unusual analyses).\n" *
+      "If keyword regression is not assigned, then the keywords\n" *
+      "'distribution' and 'link' must be assigned names of functions.\n \n"))
+  else
+    fast_method = false
+  end
+  if regression_type != "" && regression_type != "linear" &&
+     regression_type != "logistic" && regression_type != "poisson"
+    throw(ArgumentError(
+     "The keyword regression (currently: $regression_type) must be assigned\n" *
+     "the value 'linear', 'logistic', 'Poisson', or blank.\n \n"))
+  end
+  #
+  # Retrieve and error check the regression formula.
+  #
+  if regression_formula == ""
+    throw(ArgumentError(
+      "The keyword regression_formula appears blank.\n" *
+      "A regression formula must be provided.\n \n"))
+  end
+  if !contains(regression_formula, "~")
+    throw(ArgumentError(
+      "The value of the keyword regression_formula ('$regression_formula')\n" *
+      "does not contain the required '~' that should separate\n" *
+      "the trait and the predictors.\n \n"))
+  end
+  side = split(regression_formula, "~")
+  side[1] = strip(side[1])
+  side[2] = strip(side[2])
+  if side[1] == ""
+    throw(ArgumentError(
+      "The left hand side of the formula specified in\n" *
+      "the keyword regression_formula appears blank.\n" *
+      "The left hand side should contain only the name of the trait field\n" *
+      "in the Pedigree file. If the trait field is unnamed, use 'Trait'.\n \n"))
+  end
+  if search(side[1], [' ', TAB_CHAR, ',', ';', '+', '*', '&']) > 0
+    lhs_string = side[1]
+    throw(ArgumentError(
+      "The left hand side ('$lhs_string') of the formula specified in\n" *
+      "the keyword regression_formula appears to have multiple entries.\n" *
+      "The left hand side should contain only the name of the trait field\n" *
+      "in the Pedigree file. If the trait field is unnamed, use 'Trait'.\n \n"))
+  end
+  if side[2] == ""; side[2] = "1"; end
+  lhs = parse(side[1])
+  rhs = parse(side[2])
+  if !(lhs in names(pedigree_frame))
+    lhs_string = string(lhs)
+    throw(ArgumentError(
+      "The field named on the left hand side of the formula specified in\n" *
+      "the keyword regression_formula (currently: '$lhs_string')\n" *
+      "is not in the Pedigree data file.\n" *
+      "The left hand side should contain only the name of the trait field\n" *
+      "in the Pedigree file. If the trait field is unnamed, use 'Trait'.\n \n"))
+  end
+  #
+  # If the regression formula includes an interaction term,
+  # do not use the fast internal regression code.
+  #
+  if search(string(rhs), ['*', '&']) > 0; fast_method = false; end
+  #
+  return fast_method, lhs, rhs
+end #assign_method
+
+"""
+Change sex designations to 1.0 (females) and -1.0 (males).
+Since the field :Sex may have type String,
+create a new field of type Float64 that replaces :Sex.
 """
 function change_sex_desig!(person::Person, 
-  keyword::Dict{AbstractString, Any}, model::ModelFrame)
-  model.df[:NumericSex] = ones(person.people)
+  keyword::Dict{AbstractString, Any}, pedigree_frame::DataFrame)
+  #
+  # Create new column called NumericSex, entries being -1 or 1.
+  #
+  pedigree_frame[:NumericSex] = ones(person.people)
   for i = 1:person.people
-    s = model.df[i, :Sex]
+    s = pedigree_frame[i, :Sex]
     if !isa(parse(string(s), raise=false), Number); s = lowercase(s); end
-    if !(s in keyword["male"]); model.df[i, :NumericSex] = -1.0; end
+    if !(s in keyword["female"]); pedigree_frame[i, :NumericSex] = -1.0; end
   end
-  names_list = names(model.df)
+  #
+  # Remove the original sex column and rename NumericSex to Sex.
+  #
+  names_list = names(pedigree_frame)
   deleteat!(names_list, findin(names_list, [:Sex]))
-  model.df = model.df[:, names_list]
-  rename!(model.df, :NumericSex, :Sex)
+  pedigree_frame = pedigree_frame[:, names_list]
+  rename!(pedigree_frame, :NumericSex, :Sex)
+  return pedigree_frame
 end #function change_sex_desig!
 
 """ 
@@ -509,21 +548,22 @@ non-cases are 0.0, and missing data is NaN.
 Again, since the trait field may be of type string,
 create a new field of type Float64 that will replace it.
 """
-function change_trait_desig!(lhs::Symbol, case_label::String,
-  person::Person, model::ModelFrame)
-  model.df[:NumericTrait] = zeros(person.people)
+function change_case_desig!(lhs::Symbol, case_label::String,
+  person::Person, pedigree_frame::DataFrame)
+  pedigree_frame[:NumericTrait] = zeros(person.people)
   for i = 1:person.people
-    s = string(model.df[i, lhs])
-    if s == ""
-      model.df[i, :NumericTrait] = NaN
+    s = string(pedigree_frame[i, lhs])
+    if s == "" || s == " " || s == "NaN"
+      pedigree_frame[i, :NumericTrait] = NaN
     elseif s == case_label
-      model.df[i, :NumericTrait] = 1.0
+      pedigree_frame[i, :NumericTrait] = 1.0
     end
   end
   names_list = names(model.df)
   deleteat!(names_list, findin(names_list, [lhs]))
-  model.df = model.df[:, names_list]
-  rename!(model.df, :NumericTrait, lhs)
+  pedigree_frame = pedigree_frame[:, names_list]
+  rename!(pedigree_frame, :NumericTrait, lhs)
+  return pedigree_frame
 end #function change_trait_desig
 
 end # module MendelGWAS
