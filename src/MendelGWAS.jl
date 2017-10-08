@@ -21,10 +21,10 @@ using StatsBase                         # From package StatsBase.
 # Use Plots as the plotting frontend and select a backend.
 #
 using Plots                             # From package Plots.
-#gr()
-## pyplot()
+# gr()
+pyplot()
 
-export GWAS
+export GWAS, assign_method!, change_sex_desig!, change_case_desig!
 
 """
 This is the wrapper function for the GWAS analysis option.
@@ -127,14 +127,14 @@ function gwas_option(person::Person, snpdata::SnpData,
   # For these three we will use fast internal regression code,
   # unless an interaction term is detected.
   #
-  fast_method, lhs, rhs = assign_method(keyword, pedigree_frame)
+  fast_method, lhs, rhs = assign_method!(keyword, pedigree_frame)
   #
   # Change sex designations to -1.0 (females) and +1.0 (males).
   # Since the field :sex may have type string,
   # create a new field of type Float64 that will replace :sex.
   #
   if searchindex(string(rhs), "Sex") > 0 && in(:Sex, names(pedigree_frame))
-    pedigree_frame = change_sex_desig!(person, keyword, pedigree_frame)
+    change_sex_desig!(person, keyword, pedigree_frame)
   end
   #
   # For Logistic regression make sure the cases are 1.0,
@@ -185,11 +185,6 @@ function gwas_option(person::Person, snpdata::SnpData,
     # Estimate parameters under the base model. Record the vector of residuals.
     #
     (base_estimate, base_loglikelihood) = regress(X, y, regression_type)
-    println(base_estimate)
-    println(base_loglikelihood)
-    println(X)
-    println(y)
-    println(regression_type)
     if regression_type == "linear"
       residual_base = y - (X * base_estimate)
     end
@@ -344,41 +339,43 @@ function gwas_option(person::Person, snpdata::SnpData,
     # Create the scatter plot of the -log10(p-values) grouped by chromosome.
     # Set the size, shape, and color of the plotted elements.
     #
-    # plt = scatter(x = plot_frame[:SNPnumber], y = plot_frame[:NegativeLogPvalue], 
-    #   group = plot_frame[:Chromosome],
-    #   markersize = 3, markerstrokewidth = 0, color_palette = :rainbow)
-    # #
-    # # Specify the x-axis tick marks to be at the center of the chromosome.
-    # # Use x-axis tick marks only in the odd numbered chromosomes.
-    # # Also, label the x-axis.
-    # #
-    # xticks = by(plot_frame, :Chromosome, 
-    #   plot_frame -> mean(plot_frame[:SNPnumber]))
-    # xaxis!(plt, xticks = (sort(xticks[:x1].data)[1:2:end], 1:2:size(xticks, 1)))
-    # xaxis!(plt, xlabel = "Chromosome")
-    # #
-    # # Add the y-axis information.
-    # #
-    # yaxis!(plt, ylabel = "-log10(p-value)")
-    # #
-    # # Use a grey grid and remove the legend.
-    # #
-    # plot!(plt, gridcolor = :lightgrey, legend = false)
-    # #
-    # # Add an overall title.
-    # #
-    # plot!(plt, title = "Manhattan Plot", window_title = "Manhattan Plot")
-    # #
-    # # Add a dashed horizontal line that indicates the Bonferonni threshold.
-    # #
-    # Plots.abline!(plt, 0, -log10(.05 / length(pvalue)), color = :black,
-    #     line = :dash)
-    # ##    hline!(plt, -log10(.05 / length(pvalue)), line = (1, :dash, 0.5, :black))
-    # #
-    # # Display the plot and then save the plot to a file.
-    # #
-    # savefig(plt, plot_file)
-    # display(plt)
+    println("reached here 1")
+    plt = scatter(plot_frame[:SNPnumber], plot_frame[:NegativeLogPvalue], 
+      group = plot_frame[:Chromosome],
+      markersize = 3, markerstrokewidth = 0, color_palette = :rainbow)
+    println("reached here 2")
+    #
+    # Specify the x-axis tick marks to be at the center of the chromosome.
+    # Use x-axis tick marks only in the odd numbered chromosomes.
+    # Also, label the x-axis.
+    #
+    xticks = by(plot_frame, :Chromosome, 
+      plot_frame -> mean(plot_frame[:SNPnumber]))
+    xaxis!(plt, xticks = (sort(xticks[:x1].data)[1:2:end], 1:2:size(xticks, 1)))
+    xaxis!(plt, xlabel = "Chromosome")
+    #
+    # Add the y-axis information.
+    #
+    yaxis!(plt, ylabel = "-log10(p-value)")
+    #
+    # Use a grey grid and remove the legend.
+    #
+    plot!(plt, gridcolor = :lightgrey, legend = false)
+    #
+    # Add an overall title.
+    #
+    plot!(plt, title = "Manhattan Plot", window_title = "Manhattan Plot")
+    #
+    # Add a dashed horizontal line that indicates the Bonferonni threshold.
+    #
+    Plots.abline!(plt, 0, -log10(.05 / length(pvalue)), color = :black,
+        line = :dash)
+    ##    hline!(plt, -log10(.05 / length(pvalue)), line = (1, :dash, 0.5, :black))
+    #
+    # Display the plot and then save the plot to a file.
+    #
+    savefig(plt, plot_file)
+    display(plt)
   end
   return execution_error = false
 end # function gwas_option
@@ -418,7 +415,7 @@ For these three we will use fast internal regression code.
 
 returns: fast_method (boolean), lhs (Symbol), rhs (Symbol)
 """
-function assign_method(keyword::Dict{AbstractString, Any}, 
+function assign_method!(keyword::Dict{AbstractString, Any}, 
   pedigree_frame::DataFrame) 
 
   const TAB_CHAR :: Char = Char(9)
@@ -544,22 +541,22 @@ end #function change_sex_desig!
 
 """ 
 For Logistic regression make sure the cases are 1.0,
-non-cases are 0.0, and missing data is NaN.
+non-cases are 0.0, and missing data is NA.
 Again, since the trait field may be of type string,
 create a new field of type Float64 that will replace it.
 """
-function change_case_desig!(lhs::Symbol, case_label::String,
+function change_case_desig!(lhs::Symbol, case_label::AbstractString,
   person::Person, pedigree_frame::DataFrame)
   pedigree_frame[:NumericTrait] = zeros(person.people)
   for i = 1:person.people
-    s = string(pedigree_frame[i, lhs])
-    if s == "" || s == " " || s == "NaN"
-      pedigree_frame[i, :NumericTrait] = NaN
+    s = strip(string(pedigree_frame[i, lhs]))
+    if s == "" || s == "NaN" || s == "NA"
+      pedigree_frame[i, :NumericTrait] = NA
     elseif s == case_label
       pedigree_frame[i, :NumericTrait] = 1.0
     end
   end
-  names_list = names(model.df)
+  names_list = names(pedigree_frame)
   deleteat!(names_list, findin(names_list, [lhs]))
   pedigree_frame = pedigree_frame[:, names_list]
   rename!(pedigree_frame, :NumericTrait, lhs)
