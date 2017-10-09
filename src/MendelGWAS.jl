@@ -134,7 +134,7 @@ function gwas_option(person::Person, snpdata::SnpData,
   # create a new field of type Float64 that will replace :sex.
   #
   if searchindex(string(rhs), "Sex") > 0 && in(:Sex, names(pedigree_frame))
-    change_sex_desig!(person, keyword, pedigree_frame)
+    pedigree_frame = change_sex_desig!(person, keyword, pedigree_frame)
   end
   #
   # For Logistic regression make sure the cases are 1.0,
@@ -168,55 +168,11 @@ function gwas_option(person::Person, snpdata::SnpData,
   # Otherwise, for general distributions, use the code in the GLM package.
   #
   if fast_method
-    #
-    # Copy the complete rows into a design matrix X and a response vector y.
-    #
-    modelmatrx = ModelMatrix(model)
-    complete = completecases(model.df)
-    cases = sum(complete)
-    predictors = size(modelmatrx.m, 2)
-    X = zeros(cases, predictors)
-    for j = 1:predictors
-      X[:, j] = modelmatrx.m[complete, j]
-    end
-    y = zeros(cases)
-    y[1:end] = model.df[complete, lhs]
-    #
-    # Estimate parameters under the base model. Record the vector of residuals.
-    #
-    (base_estimate, base_loglikelihood) = regress(X, y, regression_type)
-    if regression_type == "linear"
-      residual_base = y - (X * base_estimate)
-    end
-    #
-    # Output the results of the base model.
-    #
-    println(io, " ")
-    println(io, "Summary for Base Model with ", fm)
-    println(io, "Regression model: ", regression_type)
-    println(io, "Link function: ", "canonical")
-    names_list = names(model.df)
-    model_names = size(names_list,1)
-    outcome_index = findin(names_list, [lhs])[1]
-    println(io, "Base components' effect estimates: ")
-    println(io, "   (Intercept) : ", signif(base_estimate[outcome_index], 6))
-    for j = 1:model_names
-      if j != outcome_index
-        println(io, "   ", names_list[j], " : ", signif(base_estimate[j], 6))
-      end
-    end
-    println(io, "Base model loglikelihood: ", signif(base_loglikelihood, 8))
-    println(io, " ")
+    (X, y, cases, complete, residual_base, 
+      base_estimate, base_loglikelihood) = run_fast_regression(model, 
+      fm, regression_type, lhs, io)
   else
-    #
-    # Let the GLM package estimate parameters. Output results.
-    #
-    link = keyword["link"]
-    distribution_family = keyword["distribution"]
-    base_model = glm(fm, model.df, distribution_family, link)
-    println(io, "Summary for Base Model:\n ")
-    print(io, base_model)
-    println(io, " ")
+    use_glm_package(keyword, model, fm, io)
   end
   #
   # Now consider the alternative model with a SNP included.
@@ -246,21 +202,9 @@ function gwas_option(person::Person, snpdata::SnpData,
     # is below the specified threshold, carry out a likelihood ratio test.
     #
     if fast_method 
-      X[:, end] = dosage[complete]
-      estimate = [base_estimate; 0.0]
-      score_test = glm_score_test(X, y, estimate, regression_type)
-      pvalue[snp] = ccdf(Chisq(1), score_test)
-      if pvalue[snp] < lrt_threshold
-        (estimate, loglikelihood) = regress(X, y, regression_type)
-        lrt = 2.0 * (loglikelihood - base_loglikelihood)
-        pvalue[snp] = ccdf(Chisq(1), lrt)
-      end
-      #
-      # Record the vector of residuals under this alternative model.
-      #
-      if regression_type == "linear"
-        residual_snp = y - (X * estimate)
-      end
+      (pvalue, residual_snp, estimate, loglikelihood) = 
+        run_score_test(X, y, snp, dosage, complete, base_estimate, 
+        base_loglikelihood, regression_type, pvalue, lrt_threshold)
     #
     # For other distributions analyze the alternative model
     # using the GLM package.
@@ -562,5 +506,126 @@ function change_case_desig!(lhs::Symbol, case_label::AbstractString,
   rename!(pedigree_frame, :NumericTrait, lhs)
   return pedigree_frame
 end #function change_trait_desig
+
+function run_fast_regression(model::ModelFrame, fm::Formula, 
+  regression_type::AbstractString, lhs::Symbol, io::IOStream)
+  #
+  # Copy the complete rows into a design matrix X and a response vector y.
+  #
+  modelmatrx = ModelMatrix(model)
+  complete = completecases(model.df)
+  cases = sum(complete)
+  predictors = size(modelmatrx.m, 2)
+  X = zeros(cases, predictors)
+  for j = 1:predictors
+    X[:, j] = modelmatrx.m[complete, j]
+  end
+  y = zeros(cases)
+  y[1:end] = model.df[complete, lhs]
+  #
+  # Estimate parameters under the base model. Record the vector of residuals.
+  #
+  (base_estimate, base_loglikelihood) = regress(X, y, regression_type)
+  if regression_type == "linear"
+    residual_base = y - (X * base_estimate)
+  end
+  #
+  # Output the results of the base model.
+  #
+  println(io, " ")
+  println(io, "Summary for Base Model with ", fm)
+  println(io, "Regression model: ", regression_type)
+  println(io, "Link function: ", "canonical")
+  names_list = names(model.df)
+  model_names = size(names_list,1)
+  outcome_index = findin(names_list, [lhs])[1]
+  println(io, "Base components' effect estimates: ")
+  println(io, "   (Intercept) : ", signif(base_estimate[outcome_index], 6))
+  for j = 1:model_names
+    if j != outcome_index
+      println(io, "   ", names_list[j], " : ", signif(base_estimate[j], 6))
+    end
+  end
+  println(io, "Base model loglikelihood: ", signif(base_loglikelihood, 8))
+  println(io, " ")
+  return (X, y, cases, complete, residual_base, 
+    base_estimate, base_loglikelihood)
+end #function run_fast_regression
+
+function use_glm_package(keyword::Dict{AbstractString, Any}, 
+  model::ModelFrame, fm::Formula, io::IOStream)
+  #
+  # Let the GLM package estimate parameters. Output results.
+  #
+  link = keyword["link"]
+  distribution_family = keyword["distribution"]
+  base_model = glm(fm, model.df, distribution_family, link)
+  println(io, "Summary for Base Model:\n ")
+  print(io, base_model)
+  println(io, " ")
+  return base_model
+end #use_glm_package
+
+function run_score_test(X::Array{Float64}, y::Array{Float64}, 
+  snp::Int64, dosage::Array{Float64}, complete::DataArray{Bool}, 
+  base_estimate::Array{Float64}, base_loglikelihood::Float64,
+  regression_type::AbstractString, pvalue::Array{Float64}, 
+  lrt_threshold::Float64)
+  X[:, end] = dosage[complete]
+  estimate = [base_estimate; 0.0]
+  score_test = glm_score_test(X, y, estimate, regression_type)
+  pvalue[snp] = ccdf(Chisq(1), score_test)
+  loglikelihood = 0.0
+  if pvalue[snp] < lrt_threshold
+    (estimate, loglikelihood) = regress(X, y, regression_type)
+    lrt = 2.0 * (loglikelihood - base_loglikelihood)
+    pvalue[snp] = ccdf(Chisq(1), lrt)
+  end
+  #
+  # Record the vector of residuals under this alternative model.
+  #
+  if regression_type == "linear"
+    residual_snp = y - (X * estimate)
+  end
+  return (pvalue, residual_snp, estimate, loglikelihood)
+end #function run_score_test
+
+# function output_snps(io::IOStream, snpdata::SnpData, pvalue::Array{Float64},
+#   snp::Int64, dosage::Array{Float64}, person::Person, fast_method::Bool, 
+#   loglikelihood::Float64, estimate::Array{Float64}, 
+#   snp_model::DataFrameRegressionModel, regression_type::AbstractString,
+#   residual_snp::Array{Float64}, residual_base::Array{Float64}, 
+#   lrt_threshold::Float64)
+#   println(io, " \n")
+#   println(io, "Summary for SNP ", snpdata.snpid[snp])
+#   println(io, " on chromosome ", snpdata.chromosome[snp],
+#     " at basepair ", snpdata.basepairs[snp])
+#   println(io, "SNP p-value: ", signif(pvalue[snp], 4))
+#   println(io, "Minor allele frequency: ", round(snpdata.maf[snp], 4))
+#   if uppercase(snpdata.chromosome[snp]) == "X"
+#     hw = xlinked_hardy_weinberg_test(dosage, person.male)
+#   else
+#     hw = hardy_weinberg_test(dosage)
+#   end
+#   println(io, "Hardy-Weinberg p-value: ", round(hw, 4))
+#   if fast_method && pvalue[snp] < lrt_threshold
+#     println(io, "SNP effect estimate: ", signif(estimate[end], 4))
+#     println(io, "SNP model loglikelihood: ", signif(loglikelihood, 8))
+#   elseif fast_method
+#     println(io, "SNP effect estimate: ", signif(estimate[end], 4))
+#   else
+#     println(io, "")
+#     println(io, snp_model)
+#   end
+#   #
+#   # For linear models, output the proportion of the base model's variance
+#   # that is explained by including this SNP in the model.
+#   #
+#   if regression_type == "linear"
+#     variance_explained = 1 - (norm(residual_snp)^2 / norm(residual_base)^2)
+#     println(io, "Proportion of base model variance explained: ",
+#       round(variance_explained, 4))
+#   end
+# end #function output_snps
 
 end # module MendelGWAS
