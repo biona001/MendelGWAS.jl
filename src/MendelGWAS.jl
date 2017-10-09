@@ -283,11 +283,9 @@ function gwas_option(person::Person, snpdata::SnpData,
     # Create the scatter plot of the -log10(p-values) grouped by chromosome.
     # Set the size, shape, and color of the plotted elements.
     #
-    println("reached here 1")
     plt = scatter(plot_frame[:SNPnumber], plot_frame[:NegativeLogPvalue], 
       group = plot_frame[:Chromosome],
       markersize = 3, markerstrokewidth = 0, color_palette = :rainbow)
-    println("reached here 2")
     #
     # Specify the x-axis tick marks to be at the center of the chromosome.
     # Use x-axis tick marks only in the odd numbered chromosomes.
@@ -319,7 +317,7 @@ function gwas_option(person::Person, snpdata::SnpData,
     # Display the plot and then save the plot to a file.
     #
     savefig(plt, plot_file)
-    display(plt)
+    # display(plt)
   end
   return execution_error = false
 end # function gwas_option
