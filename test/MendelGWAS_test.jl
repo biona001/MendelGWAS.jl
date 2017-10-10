@@ -7,6 +7,7 @@ using Distributions                     # From package Distributions.
 using GLM                               # From package GLM.
 using Plots                             # From package Plots.
 using StatsBase                         # From package StatsBase.
+using RDatasets
 
 #
 # Used to create different dictionaries so that testing different
@@ -100,7 +101,7 @@ end
     @test keyword["link"] == LogLink()
     @test keyword["regression"] == "poisson"
 
-    # are errors are being thrown properly?
+    # The rest tests of errors are being thrown properly
     keyword = make_keyword_dic()
     pedigree_frame = readtable("test1.txt")
     # check if regression type present
@@ -244,11 +245,81 @@ end
     @test model.df[2194, 1] == 1.0
 end
 
-@testset "basics" begin
-    
+@testset "run_fast_regression" begin
+    # keyword = make_keyword_dic()
+    # process_keywords!(keyword, "gwas 1 Control.txt", "")
+    # (pedigree, person, nuclear_family, locus, snpdata,
+    #    locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
+    #    read_external_data_files(keyword)
+    # people = person.people
+    # snps = snpdata.snps
+    # dosage = zeros(people)
+    # copy!(dosage, view(snpdata.snpmatrix, :, 1); impute = true)
+
+    # lhs, rhs = parse("Trait"), parse("Sex")
+    # fm = Formula(lhs, rhs) 
+    # model = ModelFrame(fm, pedigree_frame)
+    # complete = completecases(model.df)
 end
 
-@testset "correctness" begin
-    
+@testset "use_glm_package" begin
+    # This function basically calls glm() on some previously constructed
+    # models and formula, so we will test by plugging in 2 basic examples
+    # from the glm package.
+    keyword = make_keyword_dic()
+    process_keywords!(keyword, "gwas 2 Control.txt", "")
+    (pedigree, person, nuclear_family, locus, snpdata,
+       locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
+       read_external_data_files(keyword)
+
+    keyword["link"] = IdentityLink()
+    keyword["distribution"] = Normal()
+    data = DataFrame(X=[1,2,3], Y=[2,4,7])
+    fm = @formula(Y ~ X)
+    io = keyword["output_unit"]
+    model = ModelFrame(fm, data)
+    test1 = MendelGWAS.use_glm_package(keyword, model, fm, io)
+
+    @test signif(coef(test1)[1], 6) == -0.666667
+    @test signif(coef(test1)[2], 6) == 2.5
+    @test signif(stderr(test1)[1], 6) == 0.62361
+    @test signif(stderr(test1)[2], 6) == 0.288675
+    @test signif(deviance(test1), 6) == 0.166667
+    @test dof_residual(test1) == 1.0
+
+    keyword = make_keyword_dic()
+    process_keywords!(keyword, "gwas 2 Control.txt", "")
+    (pedigree, person, nuclear_family, locus, snpdata,
+       locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
+       read_external_data_files(keyword)
+    keyword["link"] = ProbitLink()
+    keyword["distribution"] = Binomial()
+    data = DataFrame(X=[1,2,3], Y=[1,0,1])
+    fm = @formula(Y ~ X)
+    io = keyword["output_unit"]
+    model = ModelFrame(fm, data)
+    test2 = MendelGWAS.use_glm_package(keyword, model, fm, io)
+
+    @test signif(coef(test2)[1], 6) == 0.430727
+    @test signif(coef(test2)[2], 6) == -3.64399e-19
+    @test signif(stderr(test2)[1], 6) == 1.98019
+    @test signif(stderr(test2)[2], 6) == 0.91665
+    @test signif(deviance(test2), 6) == 3.81909
+    @test dof_residual(test2) == 1.0
+end
+
+@testset "run_score_test" begin
+
+end
+
+@testset "basics" begin
+    keyword = make_keyword_dic()
+    process_keywords!(keyword, "gwas 1 Control.txt", "")
+    (pedigree, person, nuclear_family, locus, snpdata,
+       locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
+       read_external_data_files(keyword)
+
+    test1 = MendelGWAS.gwas_option(person, snpdata, pedigree_frame, keyword)
+    @test test1 == false
 end
 
