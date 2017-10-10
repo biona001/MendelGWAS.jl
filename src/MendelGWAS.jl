@@ -24,7 +24,7 @@ using Plots                             # From package Plots.
 # gr()
 pyplot()
 
-export GWAS, assign_method!, change_sex_desig!, change_case_desig!
+export GWAS
 
 """
 This is the wrapper function for the GWAS analysis option.
@@ -526,6 +526,8 @@ function run_fast_regression(model::ModelFrame, fm::Formula,
   (base_estimate, base_loglikelihood) = regress(X, y, regression_type)
   if regression_type == "linear"
     residual_base = y - (X * base_estimate)
+  else
+    residual_base = "Only for linear regressions"
   end
   #
   # Output the results of the base model.
@@ -584,6 +586,8 @@ function run_score_test(X::Array{Float64}, y::Array{Float64},
   #
   if regression_type == "linear"
     residual_snp = y - (X * estimate)
+  else 
+    residual_snp = "only for linear models"
   end
   return (pvalue, residual_snp, estimate, loglikelihood)
 end #function run_score_test

@@ -9,9 +9,8 @@ using Plots                             # From package Plots.
 using StatsBase                         # From package StatsBase.
 using RDatasets
 
-#
 # Used to create different dictionaries so that testing different
-# functions don't accidentally use a pre-modified dictionary.
+# functions don't accidentally use an existing dictionary.
 function make_keyword_dic()
     keyword = set_keyword_defaults!(Dict{AbstractString, Any}())
     keyword["distribution"] = "" # Binomial(), Gamma(), Normal(), Poisson(), etc.
@@ -66,7 +65,8 @@ end
     (pedigree, person, nuclear_family, locus, snpdata,
        locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
        read_external_data_files(keyword)
-    (fast_method, lhs, rhs) = assign_method!(keyword, pedigree_frame)
+    (fast_method, lhs, rhs) = 
+        MendelGWAS.assign_method!(keyword, pedigree_frame)
     @test fast_method == true
     @test string(rhs) == "Sex"
     @test string(lhs) == "Trait"
@@ -80,7 +80,8 @@ end
     (pedigree, person, nuclear_family, locus, snpdata,
        locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
        read_external_data_files(keyword)
-    (fast_method, lhs, rhs) = assign_method!(keyword, pedigree_frame)
+    (fast_method, lhs, rhs) = 
+        MendelGWAS.assign_method!(keyword, pedigree_frame)
     @test fast_method == true
     @test string(rhs) == "Sex + BMI"
     @test string(lhs) == "Case_Control"
@@ -93,7 +94,8 @@ end
     pedigree_frame = readtable("test1.txt")
     keyword["regression"] = "Poisson"
     keyword["regression_formula"] = "BMI ~ Sex & Case_Control"
-    (fast_method, lhs, rhs) = assign_method!(keyword, pedigree_frame)
+    (fast_method, lhs, rhs) = 
+        MendelGWAS.assign_method!(keyword, pedigree_frame)
     @test fast_method == false # because rhs contains interaction term
     @test string(rhs) == "Sex & Case_Control"
     @test string(lhs) == "BMI"
@@ -105,24 +107,31 @@ end
     keyword = make_keyword_dic()
     pedigree_frame = readtable("test1.txt")
     # check if regression type present
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
     keyword["regression"] = "Linear"
     # check if "~" is present in regression formula 
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
     keyword["regression_formula"] = "hello + look + at + me"
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
     # Left regression formula lacking
     keyword["regression_formula"] = " ~ look + at + me"
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
     # Left regression formula contains more than 1 
     keyword["regression_formula"] = "look + at ~ me"
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
     # Left regression formula contains bad characters
     keyword["regression_formula"] = "look at+me&you^* ~ hi + there"
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
     # Left regression formula not recognized
     keyword["regression_formula"] = "look ~ hi + there"
-    @test_throws(ArgumentError, assign_method!(keyword, pedigree_frame))
+    @test_throws(ArgumentError, 
+        MendelGWAS.assign_method!(keyword, pedigree_frame))
 end
 
 @testset "change_sex_desig!" begin
@@ -246,20 +255,101 @@ end
 end
 
 @testset "run_fast_regression" begin
-    # keyword = make_keyword_dic()
-    # process_keywords!(keyword, "gwas 1 Control.txt", "")
-    # (pedigree, person, nuclear_family, locus, snpdata,
-    #    locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
-    #    read_external_data_files(keyword)
-    # people = person.people
-    # snps = snpdata.snps
-    # dosage = zeros(people)
-    # copy!(dosage, view(snpdata.snpmatrix, :, 1); impute = true)
+    # This function basically calls the regress function in MendelBase, 
+    # which already contains its own tests. So we will just test some 
+    # basic behavior.
 
-    # lhs, rhs = parse("Trait"), parse("Sex")
-    # fm = Formula(lhs, rhs) 
-    # model = ModelFrame(fm, pedigree_frame)
-    # complete = completecases(model.df)
+    #
+    # gwas example 1, as is
+    #
+    keyword = make_keyword_dic()
+    process_keywords!(keyword, "gwas 1 Control.txt", "")
+    (pedigree, person, nuclear_family, locus, snpdata,
+       locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
+       read_external_data_files(keyword)
+    # remember to change males to -1 and females to 1
+    # otherwise the result will be wrong.
+    pedigree_frame = MendelGWAS.change_sex_desig!(person, keyword, pedigree_frame)
+    people = person.people
+    snps = snpdata.snps
+    dosage = zeros(people)
+    copy!(dosage, view(snpdata.snpmatrix, :, 1); impute = true)
+
+    lhs, rhs = parse("Trait"), parse("Sex")
+    fm = Formula(lhs, rhs) 
+    model = ModelFrame(fm, pedigree_frame)
+    complete = completecases(model.df)
+    regression_type = lowercase(keyword["regression"])
+    io = keyword["output_unit"]
+
+    (X, y, cases, complete, residual_base, base_estimate, 
+        base_loglikelihood) = MendelGWAS.run_fast_regression(model, fm, 
+        regression_type, lhs, io)
+
+    @test size(X) == (2200, 2)
+    @test sum(X[:, 1]) == 2200 #first column are 1's
+    @test X[1, 2] == 1.0 #female
+    @test X[2, 2] == -1.0 #male
+    @test X[3, 2] == 1.0 
+    @test X[2200, 2] == 1.0 
+    @test size(y) == (2200,)
+    @test y == model.df[:Trait]
+    @test cases == 2200
+    @test size(residual_base) == (2200,)
+    @test residual_base == y - (X * base_estimate)
+    @test signif(base_estimate[1], 6) == 0.142482
+    #negative sign (-0.0129378) below if males = -1 and females = 1
+    @test signif(base_estimate[2], 6) == -0.0129378 
+    @test signif(base_loglikelihood, 6) == -1258.18
+
+    #
+    # gwas example 2, with additional missing data. 
+    #
+    keyword = make_keyword_dic()
+    process_keywords!(keyword, "gwas 2 Control.txt", "")
+    (pedigree, person, nuclear_family, locus, snpdata,
+       locus_frame, phenotype_frame, pedigree_frame, 
+       snp_definition_frame) = read_external_data_files(keyword)
+    lhs, rhs = parse("Case_Control"), parse("Sex + BMI")
+    case_label = keyword["affected_designator"]
+    # remember to change males to -1 and females to 1
+    # and to exclude the first few missing data
+    pedigree_frame = MendelGWAS.change_sex_desig!(person, keyword, 
+        pedigree_frame)
+    pedigree_frame = MendelGWAS.change_case_desig!(lhs, case_label,
+        person, pedigree_frame)
+    people = person.people
+    snps = snpdata.snps
+    dosage = zeros(people)
+    copy!(dosage, view(snpdata.snpmatrix, :, 1); impute = true)
+
+    fm = Formula(lhs, rhs) 
+    model = ModelFrame(fm, pedigree_frame)
+    complete = completecases(model.df)
+    regression_type = lowercase(keyword["regression"])
+    io = keyword["output_unit"]
+
+    (X, y, cases, complete, residual_base, base_estimate, 
+        base_loglikelihood) = MendelGWAS.run_fast_regression(model, fm, 
+        regression_type, lhs, io)
+    
+    @test size(X) == (2194, 3)
+    @test sum(X[:, 1]) ≈ 2194 #first column are 1's
+    @test X[1, 2] ≈ -1.0 #male
+    @test X[2, 2] ≈ 1.0 #female
+    @test X[3, 2] ≈ 1.0 
+    @test X[2194, 2] ≈ 1.0 
+    @test size(y) == (2194,)
+    @test y == model.df[:Case_Control]
+    @test cases == 2194
+    # logistic model returns no residual base
+    @test typeof(residual_base) == String 
+    # numbers below are slightly different because 
+    # some data originally present were removed to test for missing data
+    @test signif(base_estimate[1], 6) == -0.687241 
+    @test signif(base_estimate[2], 6) == 0.012089
+    @test signif(base_estimate[3], 6) == -0.00919787  
+    @test signif(base_loglikelihood, 6) == -1312.1
 end
 
 @testset "use_glm_package" begin
@@ -294,6 +384,7 @@ end
        read_external_data_files(keyword)
     keyword["link"] = ProbitLink()
     keyword["distribution"] = Binomial()
+    # keyword["output_unit"] = "test3.txt"
     data = DataFrame(X=[1,2,3], Y=[1,0,1])
     fm = @formula(Y ~ X)
     io = keyword["output_unit"]
@@ -309,10 +400,10 @@ end
 end
 
 @testset "run_score_test" begin
-
+    
 end
 
-@testset "basics" begin
+@testset "Does all the functions come together: gwas_option" begin
     keyword = make_keyword_dic()
     process_keywords!(keyword, "gwas 1 Control.txt", "")
     (pedigree, person, nuclear_family, locus, snpdata,
@@ -321,5 +412,13 @@ end
 
     test1 = MendelGWAS.gwas_option(person, snpdata, pedigree_frame, keyword)
     @test test1 == false
+
+    keyword = make_keyword_dic()
+    process_keywords!(keyword, "gwas 1 Control.txt", "")
+    (pedigree, person, nuclear_family, locus, snpdata,
+       locus_frame, phenotype_frame, pedigree_frame, snp_definition_frame) =
+       read_external_data_files(keyword)
+    test2 = MendelGWAS.gwas_option(person, snpdata, pedigree_frame, keyword)
+    @test test2 == false
 end
 
