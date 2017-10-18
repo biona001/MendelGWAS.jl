@@ -520,14 +520,19 @@ function run_fast_regression(model::ModelFrame, fm::Formula,
   end
   y = zeros(cases)
   y[1:end] = model.df[complete, lhs]
+  residual_base = zeros(y)
   #
   # Estimate parameters under the base model. Record the vector of residuals.
   #
   (base_estimate, base_loglikelihood) = regress(X, y, regression_type)
   if regression_type == "linear"
-    residual_base = y - (X * base_estimate)
-  else
-    residual_base = "Only for linear regressions"
+    # residual_base = y - (X * base_estimate)
+    
+    copy!(residual_base, y)
+    LinAlg.BLAS.gemv!('N', -1.0, X, base_estimate, 1.0, residual_base) # residual_base = -1.0 * X * base_estimate + residual_base
+    # yhat = zeros(y)
+    # A_mul_B!(yhat, X, base_estimate)
+    # residual_base .= y .- yhat
   end
   #
   # Output the results of the base model.
@@ -571,11 +576,12 @@ function run_score_test(X::Array{Float64}, y::Array{Float64},
   base_estimate::Array{Float64}, base_loglikelihood::Float64,
   regression_type::AbstractString, pvalue::Array{Float64}, 
   lrt_threshold::Float64)
-  X[:, end] = dosage[complete]
+  @views X[:, end] = dosage[complete]
   estimate = [base_estimate; 0.0]
   score_test = glm_score_test(X, y, estimate, regression_type)
   pvalue[snp] = ccdf(Chisq(1), score_test)
   loglikelihood = 0.0
+  residual_snp = zeros(y)
   if pvalue[snp] < lrt_threshold
     (estimate, loglikelihood) = regress(X, y, regression_type)
     lrt = 2.0 * (loglikelihood - base_loglikelihood)
@@ -585,9 +591,12 @@ function run_score_test(X::Array{Float64}, y::Array{Float64},
   # Record the vector of residuals under this alternative model.
   #
   if regression_type == "linear"
-    residual_snp = y - (X * estimate)
-  else 
-    residual_snp = "only for linear models"
+    # residual_snp = y - (X * estimate)
+    LinAlg.BLAS.gemv!('N', -1.0, X, estimate, 1.0, residual_snp)
+    # yhat = zeros(y)
+    # copy!(residual_snp, y)
+    # A_mul_B!(yhat, X, estimate)
+    # residual_snp .= y .- yhat
   end
   return (pvalue, residual_snp, estimate, loglikelihood)
 end #function run_score_test
