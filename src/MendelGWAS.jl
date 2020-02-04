@@ -335,9 +335,15 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
   # Note that the completeness_mask should be applied after the sample_mask.
   # Note that now rows = people - too.few.genotypes - incomplete.predictors.
   #
-  completeness_mask = completecases(model_frame, names_in_formula)
-  dropmissing!(model_frame, names_in_formula, disallowmissing=true)
+########
+  if length(names_in_formula) > 0
+    completeness_mask = completecases(model_frame, names_in_formula)
+    dropmissing!(model_frame, names_in_formula, disallowmissing=true)
+  else
+    completeness_mask = trues(size(model_frame, 1))
+  end
   cases = size(model_frame, 1) # also = sum(completeness_mask)
+#########
 ##
 ##   model = ModelFrame(fm, person_frame[sample_mask, :])
 ##   #
@@ -380,9 +386,11 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
     predictors = size(X, 2)
     y = zeros(cases)
     y[1:end] = model_frame[!, lhs]
-    if predictors != size(predictor_names, 1)
-      throw(ArgumentError( "Inconsistency in number of predictors.\n \n"))
-    end
+######
+    # if predictors != size(predictor_names, 1)
+    #   throw(ArgumentError( "Inconsistency in number of predictors.\n \n"))
+    # end
+######
 ##    #
 ##    # Create the model matrix, initially still with any missing predictor values.
 ##    # Copy only the complete rows into design matrix X and response vector y,
@@ -445,6 +453,7 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
   #
   dosage = zeros(sum(sample_mask))
   pvalue = ones(snps)
+  betas  = zeros(snps)
   if fast_method
     alt_estimate = zeros(predictors+1)
     if regression_type == "linear"
@@ -503,6 +512,7 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
         (alt_estimate, alt_loglikelihood) = fast_regress(X, y, regression_type)
         lrt = 2.0 * (alt_loglikelihood - base_loglikelihood)
         pvalue[snp] = ccdf(Chisq(1), lrt)
+        betas[snp] = alt_estimate[end]
       end
       #
       # Record the vector of residuals under this alternative model:
@@ -620,7 +630,8 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
     Chromosome = snpdata.chromosome,
     BasePair = snpdata.basepairs,
     Pvalue = pvalue,
-    NegLog10Pvalue = -log10.(pvalue))
+    NegLog10Pvalue = -log10.(pvalue),
+    beta = betas)
   #
   # If requested, output a full listing of the p-values in csv format.
   #
