@@ -453,7 +453,7 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
   #
   dosage = zeros(sum(sample_mask))
   pvalue = ones(snps)
-  betas  = zeros(snps)
+  betas  = fill(NaN, snps)
   if fast_method
     alt_estimate = zeros(predictors+1)
     if regression_type == "linear"
@@ -547,6 +547,7 @@ function gwas_option(person::Person, snpdata::SnpDataStruct,
         throw(ArgumentError( "Predictor named SNP not found in model.\n \n"))
       end
       pvalue[snp] = coeftable(snp_model).cols[4][snp_predictor]
+      betas[snp] = coeftable(snp_model).cols[1][snp_predictor]
     end
     #
     # Output regression results for potentially significant SNPs.
